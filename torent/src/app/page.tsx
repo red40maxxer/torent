@@ -56,17 +56,20 @@ interface CombinedData {
 
 // CSV endpoints
 const BYLAW_ADDRS_ENDPOINT =
-  "https://raw.githubusercontent.com/mad-cat-lon/torent/refs/heads/main/data/bylaw/Addresses.csv";
+  "https://raw.githubusercontent.com/red40maxxer/torent/refs/heads/main/data/bylaw/Addresses.csv";
 const BYLAW_INVGS_ENDPOINT =
-  "https://raw.githubusercontent.com/mad-cat-lon/torent/refs/heads/main/data/bylaw/Investigations.csv";
+  "https://raw.githubusercontent.com/red40maxxer/torent/refs/heads/main/data/bylaw/Investigations.csv";
 const BYLAW_DEFCS_ENDPOINT =
-  "https://raw.githubusercontent.com/mad-cat-lon/torent/refs/heads/main/data/bylaw/Deficiencies.csv";
+  "https://raw.githubusercontent.com/red40maxxer/torent/refs/heads/main/data/bylaw/Deficiencies.csv";
 const FIRE_INSPECS_ENDPOINT =
-  "https://raw.githubusercontent.com/mad-cat-lon/torent/refs/heads/main/data/fire/Highrise_Inspections_Data.csv";
+  "https://raw.githubusercontent.com/red40maxxer/torent/refs/heads/main/data/fire/Highrise_Inspections_Data.csv";
 
 export default function Home() {
   const [addressInput, setAddressInput] = useState("");
   const [foundAddress, setFoundAddress] = useState("");
+  const [matchingAddresses, setMatchingAddresses] = useState<string[]>([]);
+  const [selectedAddress, setSelectedAddress] = useState<string>("");
+  const [noMatchesFound, setNoMatchesFound] = useState(false);
   const [results, setResults] = useState<CombinedData[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -103,28 +106,12 @@ export default function Home() {
     })();
   }, []);
 
-  // 2) Main search function
-  const searchAddress = async () => {
-    setLoading(true);
-    setResults([]);
-    setFoundAddress("");
-    setInvestigationsList([]);
-    setDeficienciesList([]);
-    setFireInspectionsList([]);
-
-    // A) Fuzzy match address
-    const fuse = new Fuse(bylawAddresses, { keys: ["AddrLine"], threshold: 0.4 });
-    const fuseResults = fuse.search(addressInput.toUpperCase());
-    if (fuseResults.length === 0) {
-      setLoading(false);
-      return;
-    }
-
-    const bestMatchAddr = fuseResults[0].item.AddrLine?.toUpperCase() || "";
-    setFoundAddress(bestMatchAddr);
+  // Function to load details for a selected address
+  const loadAddressDetails = (address: string) => {
+    setFoundAddress(address);
 
     const matchingAddrRows = bylawAddresses.filter(
-      (row) => row.AddrLine?.toUpperCase() === bestMatchAddr
+      (row) => row.AddrLine?.toUpperCase() === address
     );
     const invIDs = matchingAddrRows.map((row) => row.INVESTIGATION_ID);
 
@@ -155,7 +142,7 @@ export default function Home() {
 
     // C) Fuzzy match Fire
     const fireFuse = new Fuse(fireInspections, { keys: ["PropertyAddress"], threshold: 0.4 });
-    const fireFuseResults = fireFuse.search(addressInput.toUpperCase());
+    const fireFuseResults = fireFuse.search(address);
     let matchingFireRows: FireInspectionRow[] = [];
 
     if (fireFuseResults.length > 0) {
@@ -198,26 +185,63 @@ export default function Home() {
     const combinedData: CombinedData[] = [
       // Bylaw investigation statuses
       ...Object.entries(investigationCounts).map(([status, count]) => ({
-        Address: bestMatchAddr,
+        Address: address,
         Status: status,
         Count: count,
       })),
       // Bylaw deficiency statuses
       ...Object.entries(deficiencyCounts).map(([status, count]) => ({
-        Address: bestMatchAddr,
+        Address: address,
         Status: status,
         Count: count,
       })),
       // Fire code monthly
       ...Object.entries(fireCounts).map(([month, count]) => ({
-        Address: bestMatchAddr,
+        Address: address,
         Month: month,
         Count: count,
       })),
     ];
 
     setResults(combinedData);
+  };
 
+  // 2) Main search function
+  const searchAddress = async () => {
+    setLoading(true);
+    setResults([]);
+    setFoundAddress("");
+    setSelectedAddress("");
+    setMatchingAddresses([]);
+    setNoMatchesFound(false);
+    setInvestigationsList([]);
+    setDeficienciesList([]);
+    setFireInspectionsList([]);
+
+    // A) Fuzzy match address
+    const fuse = new Fuse(bylawAddresses, { keys: ["AddrLine"], threshold: 0.4 });
+    let fuseResults = fuse.search(addressInput.toUpperCase());
+    if (fuseResults.length === 0) {
+      setNoMatchesFound(true);
+      setLoading(false);
+      return;
+    }
+    
+    fuseResults = fuseResults.slice(0, 5);
+
+    // Get all unique matching addresses
+    const uniqueAddresses = Array.from(
+      new Set(fuseResults.map((result) => result.item.AddrLine?.toUpperCase() || ""))
+    ).filter((addr) => addr !== "");
+    
+    setMatchingAddresses(uniqueAddresses);
+    
+    // Auto-select the first match if there are matches
+    if (uniqueAddresses.length > 0) {
+      setSelectedAddress(uniqueAddresses[0]);
+      loadAddressDetails(uniqueAddresses[0]);
+    }
+    
     setLoading(false);
   };
 
@@ -226,9 +250,9 @@ export default function Home() {
       <h1 className="text-3xl font-bold mb-6">Toronto Highrise Safety Check</h1>
 
       <div className="flex gap-6">
-        {/* LEFT COLUMN (Search, etc.) */}
         <div className="w-1/6 bg-white p-4 rounded-md shadow-sm">
           <h2 className="text-xl font-semibold mb-4">Search</h2>
+          <h4 className="text-sm text-gray-500 mb-2">From the City of Toronto's open data portals. Refreshed daily.</h4>
           <div className="space-y-3">
             <Input
               placeholder="Enter Address"
@@ -242,11 +266,38 @@ export default function Home() {
         </div>
 
         <div className="flex-1">
-          {results.length === 0 && !loading && (
+          {noMatchesFound && (
+            <Card className="p-6">
+              <p className="text-lg text-gray-700">No address found in that database</p>
+            </Card>
+          )}
+
+          {matchingAddresses.length > 0 && (
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold mb-2">Matching Addresses:</h3>
+              <div className="flex flex-wrap gap-2">
+                {matchingAddresses.map((addr) => (
+                  <Button
+                    key={addr}
+                    variant={selectedAddress === addr ? "default" : "outline"}
+                    onClick={() => {
+                      setSelectedAddress(addr);
+                      loadAddressDetails(addr);
+                    }}
+                    className="mb-2"
+                  >
+                    {addr}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {results.length === 0 && !loading && !noMatchesFound && matchingAddresses.length === 0 && (
             <p className="text-gray-600">No results yet. Please enter an address.</p>
           )}
 
-          {results.length > 0 && (
+          {results.length > 0 && selectedAddress && (
             <section className="space-y-6">
               <h2 className="text-xl font-semibold">Results for {foundAddress}</h2>
 
